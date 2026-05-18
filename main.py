@@ -22,11 +22,9 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def fetch_table(table: str, limit: int = 500):
-    """Carga una tabla de Supabase como DataFrame."""
     try:
         res = supabase.table(table).select("*").order("timestamp", desc=True).limit(limit).execute()
-        df = pd.DataFrame(res.data)
-        return df
+        return pd.DataFrame(res.data)
     except Exception as e:
         st.error(f"Error cargando {table}: {e}")
         return pd.DataFrame()
@@ -37,14 +35,12 @@ def fetch_table(table: str, limit: int = 500):
 st.markdown("""
 <style>
 
-/* Layout más ancho y sin márgenes */
 .block-container {
     padding-left: 0.8rem;
     padding-right: 0.8rem;
     max-width: 100%;
 }
 
-/* Ajuste extra para pantallas pequeñas */
 @media (max-width: 600px) {
     .block-container {
         padding-left: 0.4rem;
@@ -52,7 +48,6 @@ st.markdown("""
     }
 }
 
-/* KPIs en scroll horizontal */
 .kpi-container {
     display: flex;
     gap: 12px;
@@ -60,19 +55,11 @@ st.markdown("""
     padding-bottom: 10px;
     padding-top: 5px;
 }
-.kpi-container::-webkit-scrollbar {
-    height: 6px;
-}
-.kpi-container::-webkit-scrollbar-thumb {
-    background: #888;
-    border-radius: 10px;
-}
 .kpi-container > div {
     min-width: 180px;
     flex-shrink: 0;
 }
 
-/* Botones estilo app móvil */
 button[kind="primary"] {
     width: 100%;
     border-radius: 8px;
@@ -80,7 +67,6 @@ button[kind="primary"] {
     font-size: 18px;
 }
 
-/* Menú superior */
 .top-menu {
     display: flex;
     justify-content: space-around;
@@ -99,9 +85,6 @@ button[kind="primary"] {
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------------------------------------------------
-# MENÚ SUPERIOR
-# ---------------------------------------------------------
 st.markdown("""
 <div class="top-menu">
     <a href="#kpis">📊 KPIs</a>
@@ -112,9 +95,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------------------------------------------------
-# FUNCIONES AUXILIARES
-# ---------------------------------------------------------
 def get_week(df, weeks_ago=0):
     if df.empty:
         return df
@@ -186,7 +166,6 @@ def compute_weekly_kpis(df_metrics, df_bjj):
 
     return kpis
 
-
 def kpi_block(label, value_tuple, suffix=""):
     value, arrow, color = value_tuple
     display = f"{value}{suffix}" if value is not None else "—"
@@ -223,17 +202,11 @@ def kpi_block(label, value_tuple, suffix=""):
         unsafe_allow_html=True
     )
 
-# ---------------------------------------------------------
-# CARGA DE DATOS
-# ---------------------------------------------------------
 df_metrics = fetch_table("metrics")
 df_bjj = fetch_table("bjj")
 
-# ---------------------------------------------------------
-# KPIs
-# ---------------------------------------------------------
-st.markdown("## 📊 KPIs Semanales", unsafe_allow_html=True)
-st.markdown('<div id="kpis" class="kpi-container">', unsafe_allow_html=True)
+st.markdown('<h2 id="kpis">📊 KPIs Semanales</h2>', unsafe_allow_html=True)
+st.markdown('<div class="kpi-container">', unsafe_allow_html=True)
 
 kpis = compute_weekly_kpis(df_metrics, df_bjj)
 
@@ -246,11 +219,62 @@ kpi_block("Consistencia", kpis["consistencia"], "/7")
 
 st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------------------------------------------------------
-# DASHBOARD DE GRÁFICOS
-# ---------------------------------------------------------
-st.markdown("## 📈 Dashboard", unsafe_allow_html=True)
-st.markdown('<div id="dashboard"></div>', unsafe_allow_html=True)
+st.markdown('<h2 id="metricas">📝 Registrar métricas</h2>', unsafe_allow_html=True)
+
+with st.form("metricas_form"):
+    peso = st.number_input("Peso (kg)", step=0.1)
+    energia = st.slider("Energía / claridad mental", 1, 10)
+    sueno = st.slider("Horas de sueño", 0, 12)
+    enviado = st.form_submit_button("Guardar métricas")
+
+    if enviado:
+        supabase.table("metrics").insert({
+            "peso": peso,
+            "energia": energia,
+            "sueno": sueno,
+            "timestamp": datetime.utcnow().isoformat()
+        }).execute()
+        st.success("Métricas guardadas")
+
+st.markdown('<h2 id="bjj">🥋 Registrar BJJ</h2>', unsafe_allow_html=True)
+
+with st.form("bjj_form"):
+    rounds_totales = st.number_input("Rounds totales", 0, 20)
+    rounds_buenos = st.number_input("Rounds buenos", 0, 20)
+    cardio = st.slider("Cardio BJJ", 1, 10)
+    recuperacion = st.slider("Recuperación entre rounds", 1, 10)
+    enviado = st.form_submit_button("Guardar BJJ")
+
+    if enviado:
+        supabase.table("bjj").insert({
+            "rounds_totales": rounds_totales,
+            "rounds_buenos": rounds_buenos,
+            "cardio_bjj": cardio,
+            "recuperacion_rounds": recuperacion,
+            "timestamp": datetime.utcnow().isoformat()
+        }).execute()
+        st.success("Entrenamiento BJJ guardado")
+
+
+st.markdown('<h2 id="entrenos">💪 Registrar entreno</h2>', unsafe_allow_html=True)
+
+with st.form("entrenos_form"):
+    tipo = st.selectbox("Tipo de entreno", ["Fuerza", "Cardio", "Movilidad"])
+    duracion = st.number_input("Duración (min)", 0, 300)
+    rpe = st.slider("RPE", 1, 10)
+    enviado = st.form_submit_button("Guardar entreno")
+
+    if enviado:
+        supabase.table("entrenos").insert({
+            "tipo": tipo,
+            "duracion": duracion,
+            "rpe": rpe,
+            "timestamp": datetime.utcnow().isoformat()
+        }).execute()
+        st.success("Entreno guardado")
+
+
+st.markdown('<h2 id="dashboard">📈 Dashboard</h2>', unsafe_allow_html=True)
 
 if not df_metrics.empty:
     df_metrics["timestamp"] = pd.to_datetime(df_metrics["timestamp"])
@@ -259,30 +283,31 @@ if not df_metrics.empty:
     chart_peso = alt.Chart(df_metrics).mark_line(point=True).encode(
         x="timestamp:T",
         y="peso:Q"
-    ).properties(height=250)
+    )
     st.altair_chart(chart_peso, use_container_width=True)
 
     st.subheader("🧠 Claridad mental")
     chart_energia = alt.Chart(df_metrics).mark_line(point=True).encode(
         x="timestamp:T",
         y="energia:Q"
-    ).properties(height=250)
+    )
     st.altair_chart(chart_energia, use_container_width=True)
 
 if not df_bjj.empty:
     df_bjj["timestamp"] = pd.to_datetime(df_bjj["timestamp"])
+    df_bjj["pct_buenos"] = (df_bjj["rounds_buenos"] / df_bjj["rounds_totales"]) * 100
 
     st.subheader("🔥 Cardio BJJ")
     chart_cardio = alt.Chart(df_bjj).mark_line(point=True).encode(
         x="timestamp:T",
         y="cardio_bjj:Q"
-    ).properties(height=250)
+    )
     st.altair_chart(chart_cardio, use_container_width=True)
 
     st.subheader("🥋 % Rounds buenos")
-    df_bjj["pct_buenos"] = (df_bjj["rounds_buenos"] / df_bjj["rounds_totales"]) * 100
     chart_rounds = alt.Chart(df_bjj).mark_line(point=True).encode(
         x="timestamp:T",
         y="pct_buenos:Q"
-    ).properties(height=250)
+    )
     st.altair_chart(chart_rounds, use_container_width=True)
+
