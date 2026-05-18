@@ -37,43 +37,40 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ---------------------------------------------------------
 # FUNCIONES
 # ---------------------------------------------------------
-def kpi_block(label, value_tuple, suffix=""):
-    value, arrow, color = value_tuple
-    display = f"{value}{suffix}" if value is not None else "—"
 
+
+def kpi_block(label, value, suffix=""):
     # Detectar tema actual
     theme = st.get_option("theme.base")
 
-    # Colores adaptativos
     if theme == "dark":
         bg = "#1e1e1e"
         text_color = "#ffffff"
         border = "#333333"
     else:
-        bg = "#f7f7f7"
+        bg = "#ffffff"
         text_color = "#000000"
         border = "#dddddd"
 
     st.markdown(
         f"""
         <div style="
-            padding:12px;
-            border-radius:10px;
+            padding:18px;
+            border-radius:12px;
             background-color:{bg};
             color:{text_color};
             border:1px solid {border};
             text-align:center;
+            box-shadow:0 2px 4px rgba(0,0,0,0.05);
         ">
-            <div style="font-size:14px; opacity:0.8;">{label}</div>
-            <div style="font-size:26px; font-weight:600;">
-                {display}
-                <span style="color:{color}; font-weight:700;">{arrow}</span>
+            <div style="font-size:14px; opacity:0.7;">{label}</div>
+            <div style="font-size:30px; font-weight:700; margin-top:4px;">
+                {value}{suffix}
             </div>
         </div>
         """,
         unsafe_allow_html=True
     )
-
 
 def fetch_table(table: str, limit: int = 500):
     """Obtiene datos de una tabla de Supabase como DataFrame."""
@@ -82,6 +79,15 @@ def fetch_table(table: str, limit: int = 500):
         return pd.DataFrame(res.data)
     except Exception as e:
         st.error(f"Error al cargar datos: {e}")
+        return pd.DataFrame()
+
+
+def fetch_comidas_bedca():
+    try:
+        res = supabase.table("comidas_bedca").select("*").order("timestamp", desc=True).execute()
+        return pd.DataFrame(res.data)
+    except Exception as e:
+        st.error(f"Error al cargar comidas: {e}")
         return pd.DataFrame()
 
 
@@ -109,6 +115,33 @@ def section_title(icon, title):
 
 def timestamp():
     return datetime.utcnow().isoformat()
+
+
+@st.cache_data(show_spinner="Cargando base de datos BEDCA…")
+def load_bedca():
+    try:
+        df = pd.read_csv("bedca_alimentos_limpio.csv", sep=",")
+        
+        # Normalizar nombres de columnas
+        df.columns = df.columns.str.strip().str.lower()
+        
+        # Validación mínima
+        if "alimento" not in df.columns:
+            st.error("❌ El archivo BEDCA no contiene la columna 'alimento'.")
+            return pd.DataFrame()
+        
+        # Reemplazar NaN por 0 en nutrientes
+        df = df.fillna(0)
+
+        return df
+
+    except FileNotFoundError:
+        st.error("❌ No se encontró el archivo 'bedca_alimentos_limpio.csv'.")
+        return pd.DataFrame()
+
+    except Exception as e:
+        st.error(f"❌ Error cargando BEDCA: {e}")
+        return pd.DataFrame()
 
 
 def compute_weekly_kpis(df_metrics, df_bjj):
@@ -215,19 +248,26 @@ with tab_metrics:
     col1, col2, col3 = st.columns(3)
     col4, col5, col6 = st.columns(3)
 
+    peso = kpis["peso"][0]
+    rounds_buenos = kpis["rounds_buenos"][0]
+    recuperacion = kpis["recuperacion"][0]
+    cardio = kpis["cardio"][0]
+    claridad = kpis["claridad"][0]
+    consistencia = kpis["consistencia"][0]
+
     with col1:
-        kpi_block("Peso promedio", kpis["peso"], " kg")
+        kpi_block("Peso promedio", f"{peso}", " kg")
     with col2:
-        kpi_block("% Rounds buenos", kpis["rounds_buenos"], "%")
+        kpi_block("% Rounds buenos", f"{rounds_buenos}", "%")
     with col3:
-        kpi_block("Recuperación", kpis["recuperacion"])
+        kpi_block("Recuperación", f"{recuperacion}")
 
     with col4:
-        kpi_block("Cardio competitivo", kpis["cardio"])
+        kpi_block("Cardio competitivo", f"{cardio}")
     with col5:
-        kpi_block("Claridad mental", kpis["claridad"])
+        kpi_block("Claridad mental", f"{claridad}")
     with col6:
-        kpi_block("Consistencia", kpis["consistencia"], "/7")
+        kpi_block("Consistencia", f"{consistencia}", "/7")
 
     st.markdown("---")
 
@@ -332,87 +372,424 @@ with tab_metrics:
                 **tecnicas,
                 "notas_bjj": notas_bjj
             })
+
+
 with tab_entrenos:
-    section_title("🏋️‍♂️", "Rutina de ejercicios")
-    st.markdown("Registra los ejercicios específicos realizados en tu sesión de fuerza o técnica.")
+    section_title("🏋️‍♂️", "Rutinas de entrenamiento")
 
-    if "ejercicios" not in st.session_state:
-        st.session_state.ejercicios = []
+    modo = st.radio(
+        "¿Qué quieres hacer?",
+        ["Crear rutina", "Ejecutar rutina"],
+        horizontal=True
+    )
 
-    st.markdown("### 🏗️ Añadir ejercicio")
+    # ---------------------------------------------------------
+    # MODO 1: CREAR RUTINA
+    # ---------------------------------------------------------
+    if modo == "Crear rutina":
+        st.markdown("### 🏗️ Crear nueva rutina")
 
-    with st.form("add_exercise_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            nombre = st.text_input("Ejercicio", placeholder="Press banca, sentadilla, remo...")
-            series = st.number_input("Series", min_value=1, value=3)
-            repeticiones = st.number_input("Repeticiones", min_value=1, value=8)
-        with col2:
-            peso = st.number_input("Peso (kg)", min_value=0.0, value=0.0, step=0.5)
-            rpe_ej = st.slider("RPE (opcional)", 1, 10, 7)
-
-        if st.form_submit_button("Añadir ejercicio"):
-            st.session_state.ejercicios.append({
-                "nombre": nombre,
-                "series": series,
-                "repeticiones": repeticiones,
-                "peso": peso,
-                "rpe": rpe_ej
-            })
-            st.success(f"Ejercicio añadido: {nombre}")
-
-    if st.session_state.ejercicios:
-        st.markdown("### 📋 Ejercicios añadidos")
-        for i, ej in enumerate(st.session_state.ejercicios):
-            st.write(f"**{i+1}. {ej['nombre']}** — {ej['series']}×{ej['repeticiones']} — {ej['peso']} kg — RPE {ej['rpe']}")
-
-        if st.button("Guardar rutina completa"):
-            insert_row("rutina", {
-                "timestamp": timestamp(),
-                "ejercicios": st.session_state.ejercicios
-            })
+        if "ejercicios" not in st.session_state:
             st.session_state.ejercicios = []
 
+        rutina_nombre = st.text_input("Nombre de la rutina", placeholder="Ej: Full Body A, Torso, Pierna...")
+
+        st.markdown("#### Añadir ejercicio")
+
+        with st.form("add_exercise_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                nombre = st.text_input("Ejercicio", placeholder="Press banca, sentadilla, remo...")
+                series = st.number_input("Series", min_value=1, value=3)
+                repeticiones = st.number_input("Repeticiones", min_value=1, value=8)
+            with col2:
+                peso = st.number_input("Peso (kg)", min_value=0.0, value=0.0, step=0.5)
+                rpe_ej = st.slider("RPE (opcional)", 1, 10, 7)
+
+            if st.form_submit_button("Añadir ejercicio"):
+                st.session_state.ejercicios.append({
+                    "nombre": nombre,
+                    "series": series,
+                    "repeticiones": repeticiones,
+                    "peso": peso,
+                    "rpe": rpe_ej
+                })
+                st.success(f"Ejercicio añadido: {nombre}")
+
+        if st.session_state.ejercicios:
+            st.markdown("### 📋 Ejercicios añadidos")
+            for i, ej in enumerate(st.session_state.ejercicios):
+                st.write(f"**{i+1}. {ej['nombre']}** — {ej['series']}×{ej['repeticiones']} — {ej['peso']} kg — RPE {ej['rpe']}")
+
+            if st.button("Guardar rutina completa"):
+                if rutina_nombre.strip() == "":
+                    st.warning("Pon un nombre a la rutina antes de guardarla")
+                else:
+                    insert_row("rutina", {
+                        "timestamp": timestamp(),
+                        "nombre": rutina_nombre,
+                        "ejercicios": st.session_state.ejercicios
+                    })
+                    st.success(f"Rutina '{rutina_nombre}' guardada correctamente")
+                    st.session_state.ejercicios = []
+
+    # ---------------------------------------------------------
+    # MODO 2: EJECUTAR RUTINA
+    # ---------------------------------------------------------
+    if modo == "Ejecutar rutina":
+        st.markdown("### 🏋️‍♂️ Ejecutar una rutina guardada")
+
+        df_rutinas = fetch_table("rutina")
+
+        if df_rutinas.empty:
+            st.info("Todavía no hay rutinas guardadas.")
+        else:
+            nombres_rutinas = df_rutinas["nombre"].tolist()
+            rutina_sel = st.selectbox("Selecciona una rutina", nombres_rutinas)
+
+            rutina = df_rutinas[df_rutinas["nombre"] == rutina_sel].iloc[0]
+            ejercicios = rutina["ejercicios"]
+
+            st.markdown(f"### 📘 Rutina: **{rutina_sel}**")
+
+            if "progreso_rutina" not in st.session_state:
+                st.session_state.progreso_rutina = {}
+
+            for i, ej in enumerate(ejercicios):
+                st.markdown(f"#### {ej['nombre']}")
+
+                check = st.checkbox("Completado", key=f"check_{rutina_sel}_{i}")
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    peso_real = st.number_input("Peso usado (kg)", min_value=0.0, value=float(ej['peso']), key=f"peso_real_{i}")
+                with col2:
+                    reps_real = st.number_input("Reps realizadas", min_value=0, value=int(ej['repeticiones']), key=f"reps_real_{i}")
+                with col3:
+                    rpe_real = st.slider("RPE", 1, 10, ej['rpe'], key=f"rpe_real_{i}")
+
+                st.session_state.progreso_rutina[i] = {
+                    "nombre": ej["nombre"],
+                    "completado": check,
+                    "peso": peso_real,
+                    "reps": reps_real,
+                    "rpe": rpe_real
+                }
+
+            if st.button("Guardar entrenamiento realizado"):
+                insert_row("entrenos_realizados", {
+                    "timestamp": timestamp(),
+                    "rutina": rutina_sel,
+                    "ejercicios": st.session_state.progreso_rutina
+                })
+                st.success("Entrenamiento guardado correctamente")
+                st.session_state.progreso_rutina = {}
 
 with tab_alimentacion:
-    section_title("🥗", "Registro de alimentación")
-    st.markdown("Registra tus comidas del día para llevar un control nutricional más preciso.")
+    st.markdown("""
+<style>
 
-    with st.form("food_form"):
-        col1, col2 = st.columns(2)
+/* Card bonita */
+.food-card {
+    background: #f8f9fa;
+    padding: 14px;
+    border-radius: 10px;
+    border: 1px solid #e0e0e0;
+    margin-bottom: 10px;
+}
 
-        with col1:
-            tipo_comida = st.selectbox(
-                "Tipo de comida",
-                ["Desayuno", "Comida", "Cena", "Snack"],
-                help="Selecciona el momento del día."
+/* Título de sección */
+.section-title {
+    font-size: 22px;
+    font-weight: 600;
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+/* Inputs más compactos */
+input, select, textarea {
+    border-radius: 6px !important;
+}
+
+/* Tablas más limpias */
+.dataframe tbody tr th {
+    font-size: 13px;
+}
+.dataframe tbody td {
+    font-size: 13px;
+}
+
+/* Métricas más elegantes */
+.metric-card {
+    padding: 12px;
+    border-radius: 10px;
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    text-align: center;
+}
+
+.metric-value {
+    font-size: 24px;
+    font-weight: 700;
+}
+
+.metric-label {
+    font-size: 13px;
+    opacity: 0.7;
+}
+
+</style>
+""", unsafe_allow_html=True)
+    st.markdown('<div class="section-title">🥗 Constructor de Comidas (BEDCA)</div>', unsafe_allow_html=True)
+
+    df_bedca = load_bedca()
+
+    nutrientes = [
+        c for c in df_bedca.columns
+        if c not in ["food_id", "alimento"] and df_bedca[c].dtype != "object"
+    ]
+
+    st.header("🥕 Selecciona alimentos")
+
+    selected_foods = st.multiselect(
+        "Alimentos",
+        sorted(df_bedca["alimento"].unique())
+    )
+
+    if selected_foods:
+
+        st.markdown('<div class="section-title">📋 Cantidades por alimento</div>', unsafe_allow_html=True)
+
+        meal_data = []
+
+        for food in selected_foods:
+            with st.container():
+                st.markdown(food, unsafe_allow_html=True)
+
+                grams = st.number_input(
+                    f"Cantidad en gramos",
+                    min_value=0.0,
+                    value=100.0,
+                    step=10.0,
+                    key=f"grams_{food}"
+                )
+
+                row = df_bedca[df_bedca["alimento"] == food].iloc[0]
+
+                food_entry = {"alimento": food, "gramos": grams}
+
+                for n in nutrientes:
+                    food_entry[n] = row[n] * grams / 100
+
+                meal_data.append(food_entry)
+
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        meal_df = pd.DataFrame(meal_data)
+
+        macro_cols = ["energia_kcal", "proteina_total", "carbohidratos", "grasa_total"]
+        other_cols = [c for c in meal_df.columns if c not in macro_cols + ["alimento", "gramos"]]
+
+        meal_df = meal_df[["alimento", "gramos"] + macro_cols + other_cols]
+
+        # ---------------------------
+        # NUTRIENTES POR ALIMENTO (vista compacta)
+        # ---------------------------
+        st.markdown('<div class="section-title">🥗 Nutrientes por alimento</div>', unsafe_allow_html=True)
+
+        for _, row in meal_df.iterrows():
+            with st.expander(f"{row['alimento']} — {row['energia_kcal']:.0f} kcal"):
+
+                # MACROS DEL ALIMENTO
+                c1, c2, c3, c4 = st.columns(4)
+                with c1: kpi_block("Kcal", f"{row['energia_kcal']:.0f}")
+                with c2: kpi_block("Proteína", f"{row['proteina_total']:.1f}", " g")
+                with c3: kpi_block("Carbs", f"{row['carbohidratos']:.1f}", " g")
+                with c4: kpi_block("Grasas", f"{row['grasa_total']:.1f}", " g")
+
+                # MICRONUTRIENTES DEL ALIMENTO
+                micro = row.drop(labels=["alimento", "gramos"] + macro_cols).to_frame().reset_index()
+                micro.columns = ["Nutriente", "Valor"]
+                micro["Valor"] = micro["Valor"].round(3)
+
+                with st.expander("Micronutrientes"):
+                    st.dataframe(micro, use_container_width=True, hide_index=True)
+
+        # ---------------------------
+        # TOTALES DE LA COMIDA
+        # ---------------------------
+        st.markdown('<div class="section-title">📊 Totales de la comida</div>', unsafe_allow_html=True)
+
+        totals = meal_df[nutrientes].sum().reset_index()
+        totals.columns = ["Nutriente", "Total"]
+        totals["Total"] = totals["Total"].round(2)
+
+        # Extraer macros
+        kcal = totals.loc[totals["Nutriente"] == "energia_kcal", "Total"].values[0]
+        prot = totals.loc[totals["Nutriente"] == "proteina_total", "Total"].values[0]
+        carb = totals.loc[totals["Nutriente"] == "carbohidratos", "Total"].values[0]
+        gras = totals.loc[totals["Nutriente"] == "grasa_total", "Total"].values[0]
+
+        # MACROS DESTACADOS
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: kpi_block("Kcal", f"{kcal:.0f}")
+        with c2: kpi_block("Proteína", f"{prot:.1f}", " g")
+        with c3: kpi_block("Carbohidratos", f"{carb:.1f}", " g")
+        with c4: kpi_block("Grasas", f"{gras:.1f}", " g")
+
+        # MICRONUTRIENTES DE LA COMIDA
+        st.markdown("### 🧪 Micronutrientes totales")
+
+        with st.expander("Ver micronutrientes"):
+            micro_tot = totals[
+                ~totals["Nutriente"].isin([
+                    "energia_kcal", "proteina_total", "carbohidratos", "grasa_total"
+                ])
+            ].copy()
+
+            st.dataframe(micro_tot, use_container_width=True, hide_index=True)
+        # ---------------------------
+        # GUARDAR EN SUPABASE
+        # ---------------------------
+        st.markdown('<div class="section-title">💾 Guardar comida</div>', unsafe_allow_html=True)
+
+        meal_name = st.text_input("Nombre de la comida", placeholder="Ej: Desayuno 9 abril")
+        notas = st.text_area("Notas (opcional)")
+
+        if st.button("Guardar comida en Supabase"):
+            if meal_name.strip() == "":
+                st.warning("Pon un nombre a la comida antes de guardarla")
+            else:
+                insert_row("comidas_bedca", {
+                    "timestamp": timestamp(),
+                    "nombre": meal_name,
+                    "alimentos": meal_df.fillna(0).to_dict(orient="records"),
+                    "totales": totals.fillna(0).to_dict(orient="records"),
+                    "notas": notas
+                })
+    else:
+        st.info("Selecciona al menos un alimento desde la barra lateral.")
+
+
+
+    st.markdown('<div class="section-title">📚 Historial de comidas</div>', unsafe_allow_html=True)
+
+    df_comidas = fetch_comidas_bedca()
+
+    if df_comidas.empty:
+        st.info("Todavía no has registrado ninguna comida.")
+    else:
+        # Ordenar por fecha descendente
+        df_comidas = df_comidas.sort_values("timestamp", ascending=False)
+
+        for _, comida in df_comidas.iterrows():
+
+            # Extraer totales principales
+            tot = pd.DataFrame(comida["totales"])
+            kcal = tot.loc[tot["Nutriente"] == "energia_kcal", "Total"].values[0]
+            prot = tot.loc[tot["Nutriente"] == "proteina_total", "Total"].values[0]
+            carb = tot.loc[tot["Nutriente"] == "carbohidratos", "Total"].values[0]
+            gras = tot.loc[tot["Nutriente"] == "grasa_total", "Total"].values[0]
+
+            with st.expander(f"🍽️ {comida['nombre']} — {kcal:.0f} kcal"):
+
+                st.caption(f"📅 {comida['timestamp']}")
+
+                # ---------------------------
+                # MACROS DESTACADOS (KPI BLOCK)
+                # ---------------------------
+                st.markdown("### 📦 Macronutrientes")
+
+                c1, c2, c3, c4 = st.columns(4)
+
+                with c1: 
+                    kpi_block("Kcal", f"{kcal:.0f}")
+                with c2: 
+                    kpi_block("Proteína", f"{prot:.1f}", " g")
+                with c3: 
+                    kpi_block("Carbohidratos", f"{carb:.1f}", " g")
+                with c4: 
+                    kpi_block("Grasas", f"{gras:.1f}", " g")
+
+                # ---------------------------
+                # ALIMENTOS
+                # ---------------------------
+                st.markdown("### 🥗 Alimentos")
+                alimentos_df = pd.DataFrame(comida["alimentos"])
+                st.dataframe(alimentos_df, use_container_width=True, hide_index=True)
+
+                # ---------------------------
+                # MICRONUTRIENTES EN EXPANDER
+                # ---------------------------
+                st.markdown("### 🧪 Micronutrientes")
+
+                with st.expander("Ver micronutrientes"):
+                    micro_df = tot[
+                        ~tot["Nutriente"].isin([
+                            "energia_kcal", "proteina_total", "carbohidratos", "grasa_total"
+                        ])
+                    ].copy()
+
+                    micro_df["Total"] = micro_df["Total"].round(3)
+
+                    st.dataframe(
+                        micro_df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+
+    st.markdown('<div class="section-title">📅 Totales del día</div>', unsafe_allow_html=True)
+
+    df_comidas["fecha"] = pd.to_datetime(df_comidas["timestamp"]).dt.date
+
+    fecha_sel = st.date_input("Selecciona una fecha")
+
+    df_dia = df_comidas[df_comidas["fecha"] == fecha_sel]
+
+    if df_dia.empty:
+        st.info("No hay comidas registradas en esa fecha.")
+    else:
+        # Sumar totales
+        lista_totales = [pd.DataFrame(row["totales"]) for _, row in df_dia.iterrows()]
+        df_sum = pd.concat(lista_totales).groupby("Nutriente")["Total"].sum().reset_index()
+
+        # Extraer macros
+        kcal = df_sum.loc[df_sum["Nutriente"] == "energia_kcal", "Total"].values[0]
+        prot = df_sum.loc[df_sum["Nutriente"] == "proteina_total", "Total"].values[0]
+        carb = df_sum.loc[df_sum["Nutriente"] == "carbohidratos", "Total"].values[0]
+        gras = df_sum.loc[df_sum["Nutriente"] == "grasa_total", "Total"].values[0]
+
+        st.markdown("### 📦 Resumen del día")
+
+        # Extraer macros
+        kcal = df_sum.loc[df_sum["Nutriente"] == "energia_kcal", "Total"].values[0]
+        prot = df_sum.loc[df_sum["Nutriente"] == "proteina_total", "Total"].values[0]
+        carb = df_sum.loc[df_sum["Nutriente"] == "carbohidratos", "Total"].values[0]
+        gras = df_sum.loc[df_sum["Nutriente"] == "grasa_total", "Total"].values[0]
+
+        # Tarjetas grandes para macros
+        c1, c2, c3, c4 = st.columns(4)
+
+        with c1: kpi_block("Kcal", f"{kcal:.0f}")
+        with c2: kpi_block("Proteína", f"{prot:.1f}", " g")
+        with c3: kpi_block("Carbohidratos", f"{carb:.1f}", " g")
+        with c4: kpi_block("Grasas", f"{gras:.1f}", " g")
+
+        # Micronutrientes en expander
+        st.markdown("### 🧪 Micronutrientes")
+
+        with st.expander("Ver micronutrientes"):
+            micro_df = df_sum[
+                ~df_sum["Nutriente"].isin([
+                    "energia_kcal", "proteina_total", "carbohidratos", "grasa_total"
+                ])
+            ].copy()
+
+            micro_df["Total"] = micro_df["Total"].round(3)
+
+            st.dataframe(
+                micro_df,
+                use_container_width=True,
+                hide_index=True
             )
-            nombre_plato = st.text_input(
-                "Nombre del plato",
-                placeholder="Ej: Tortilla de 3 huevos, arroz con pollo..."
-            )
-            calorias = st.number_input(
-                "Calorías (kcal)",
-                min_value=0,
-                value=0,
-                help="Calorías aproximadas del plato."
-            )
-
-        with col2:
-            proteinas = st.number_input("Proteínas (g)", min_value=0, value=0)
-            carbohidratos = st.number_input("Carbohidratos (g)", min_value=0, value=0)
-            grasas = st.number_input("Grasas (g)", min_value=0, value=0)
-
-        notas_comida = st.text_area("Notas adicionales", placeholder="Ej: Me sentó pesado, lo comí después de entrenar...")
-
-        if st.form_submit_button("Guardar comida"):
-            insert_row("alimentacion", {
-                "timestamp": timestamp(),
-                "tipo_comida": tipo_comida,
-                "nombre_plato": nombre_plato,
-                "calorias": calorias,
-                "proteinas": proteinas,
-                "carbohidratos": carbohidratos,
-                "grasas": grasas,
-                "notas": notas_comida
-            })
