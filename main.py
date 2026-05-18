@@ -1,14 +1,14 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ---------------------------------------------------------
 # CONFIGURACIÓN GENERAL
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="Registro Deportivo",
-    layout="centered",
+    layout="wide",
     page_icon="📘"
 )
 
@@ -37,6 +37,62 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ---------------------------------------------------------
 # FUNCIONES
 # ---------------------------------------------------------
+def kpi_block(label, value_tuple, suffix=""):
+    value, arrow, color = value_tuple
+    display = f"{value}{suffix}" if value is not None else "—"
+
+    # Detectar tema actual
+    theme = st.get_option("theme.base")
+
+    # Colores adaptativos
+    if theme == "dark":
+        bg = "#1e1e1e"
+        text_color = "#ffffff"
+        border = "#333333"
+    else:
+        bg = "#f7f7f7"
+        text_color = "#000000"
+        border = "#dddddd"
+
+    st.markdown(
+        f"""
+        <div style="
+            padding:12px;
+            border-radius:10px;
+            background-color:{bg};
+            color:{text_color};
+            border:1px solid {border};
+            text-align:center;
+        ">
+            <div style="font-size:14px; opacity:0.8;">{label}</div>
+            <div style="font-size:26px; font-weight:600;">
+                {display}
+                <span style="color:{color}; font-weight:700;">{arrow}</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+def fetch_table(table: str, limit: int = 500):
+    """Obtiene datos de una tabla de Supabase como DataFrame."""
+    try:
+        res = supabase.table(table).select("*").order("timestamp", desc=True).limit(limit).execute()
+        return pd.DataFrame(res.data)
+    except Exception as e:
+        st.error(f"Error al cargar datos: {e}")
+        return pd.DataFrame()
+
+
+def get_last_week(df):
+    if df.empty:
+        return df
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    one_week_ago = datetime.utcnow() - timedelta(days=7)
+    return df[df["timestamp"] >= one_week_ago]
+
+
 def insert_row(table: str, data: dict):
     """Inserta una fila en Supabase con manejo de errores."""
     try:
@@ -55,12 +111,122 @@ def timestamp():
     return datetime.utcnow().isoformat()
 
 
+def compute_weekly_kpis(df_metrics, df_bjj):
+    kpis = {}
+
+    # Semana actual y anterior
+    m_this = get_week(df_metrics, 0)
+    m_prev = get_week(df_metrics, 1)
+
+    b_this = get_week(df_bjj, 0)
+    b_prev = get_week(df_bjj, 1)
+
+    # Helper seguro
+    def safe_mean(df, col):
+        return round(df[col].mean(), 2) if not df.empty and col in df.columns else None
+
+    def safe_sum(df, col):
+        return df[col].sum() if not df.empty and col in df.columns else 0
+
+    def compare(current, previous):
+        if current is None or previous is None:
+            return "→", "gray"
+        if current > previous:
+            return "↑", "green"
+        if current < previous:
+            return "↓", "red"
+        return "→", "gray"
+
+    # Peso promedio
+    peso_this = safe_mean(m_this, "peso")
+    peso_prev = safe_mean(m_prev, "peso")
+    kpis["peso"] = (peso_this, *compare(peso_this, peso_prev))
+
+    # % rounds buenos
+    total_this = safe_sum(b_this, "rounds_totales")
+    buenos_this = safe_sum(b_this, "rounds_buenos")
+    pct_this = round((buenos_this / total_this) * 100, 1) if total_this > 0 else None
+
+    total_prev = safe_sum(b_prev, "rounds_totales")
+    buenos_prev = safe_sum(b_prev, "rounds_buenos")
+    pct_prev = round((buenos_prev / total_prev) * 100, 1) if total_prev > 0 else None
+
+    kpis["rounds_buenos"] = (pct_this, *compare(pct_this, pct_prev))
+
+    # Recuperación
+    rec_this = safe_mean(b_this, "recuperacion_rounds")
+    rec_prev = safe_mean(b_prev, "recuperacion_rounds")
+    kpis["recuperacion"] = (rec_this, *compare(rec_this, rec_prev))
+
+    # Cardio competitivo
+    cardio_this = safe_mean(b_this, "cardio_bjj")
+    cardio_prev = safe_mean(b_prev, "cardio_bjj")
+    kpis["cardio"] = (cardio_this, *compare(cardio_this, cardio_prev))
+
+    # Claridad mental
+    clar_this = safe_mean(m_this, "energia")
+    clar_prev = safe_mean(m_prev, "energia")
+    kpis["claridad"] = (clar_this, *compare(clar_this, clar_prev))
+
+    # Consistencia
+    cons_this = m_this["timestamp"].dt.date.nunique() if not m_this.empty else None
+    cons_prev = m_prev["timestamp"].dt.date.nunique() if not m_prev.empty else None
+    kpis["consistencia"] = (cons_this, *compare(cons_this, cons_prev))
+
+    return kpis
+
+
+def get_week(df, weeks_ago=0):
+    """
+    weeks_ago = 0 → esta semana
+    weeks_ago = 1 → semana anterior
+    """
+    if df.empty:
+        return df
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    today = datetime.utcnow()
+
+    start = today - timedelta(days=7 * (weeks_ago + 1))
+    end = today - timedelta(days=7 * weeks_ago)
+
+    return df[(df["timestamp"] >= start) & (df["timestamp"] < end)]
+
+
+
+
 # ---------------------------------------------------------
 # TÍTULO PRINCIPAL
 # ---------------------------------------------------------
 st.title("📘 Registro Deportivo Personal")
 st.write("Controla tus métricas, entrenos y sesiones de BJJ de forma sencilla y profesional.")
 
+st.markdown("---")
+st.subheader("📈 KPIs Semanales (con comparación)")
+
+df_metrics = fetch_table("metrics")
+df_bjj = fetch_table("bjj")
+
+kpis = compute_weekly_kpis(df_metrics, df_bjj)
+
+col1, col2, col3 = st.columns(3)
+col4, col5, col6 = st.columns(3)
+
+with col1:
+    kpi_block("Peso promedio", kpis["peso"], " kg")
+with col2:
+    kpi_block("% Rounds buenos", kpis["rounds_buenos"], "%")
+with col3:
+    kpi_block("Recuperación", kpis["recuperacion"])
+
+with col4:
+    kpi_block("Cardio competitivo", kpis["cardio"])
+with col5:
+    kpi_block("Claridad mental", kpis["claridad"])
+with col6:
+    kpi_block("Consistencia", kpis["consistencia"], "/7")
+
+st.markdown("---")
 
 # ---------------------------------------------------------
 # MÉTRICAS DIARIAS
