@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 from datetime import datetime, timedelta
+import uuid
 
 # ---------------------------------------------------------
 # CONFIGURACIÓN GENERAL
@@ -37,7 +38,9 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ---------------------------------------------------------
 # FUNCIONES
 # ---------------------------------------------------------
-
+def fetch_fotos(comida_id):
+    res = supabase.table("comidas_fotos").select("*").eq("comida_id", comida_id).execute()
+    return res.data if res.data else []
 
 def kpi_block(label, value, suffix=""):
     # Detectar tema actual
@@ -100,13 +103,14 @@ def get_last_week(df):
 
 
 def insert_row(table: str, data: dict):
-    """Inserta una fila en Supabase con manejo de errores."""
+    """Inserta una fila en Supabase y devuelve el registro insertado."""
     try:
-        supabase.table(table).insert(data).execute()
-        st.success("Datos guardados correctamente")
+        res = supabase.table(table).insert(data).select("*").execute()
+        return res.data  # ESTO ES LO IMPORTANTE
     except Exception as e:
         st.error("❌ Error al guardar datos")
         st.code(str(e))
+        return None
 
 
 def section_title(icon, title):
@@ -197,8 +201,8 @@ def compute_weekly_kpis(df_metrics, df_bjj):
     kpis["cardio"] = (cardio_this, *compare(cardio_this, cardio_prev))
 
     # Claridad mental
-    clar_this = safe_mean(m_this, "energia")
-    clar_prev = safe_mean(m_prev, "energia")
+    clar_this = safe_mean(b_this, "claridad_mental_bjj")
+    clar_prev = safe_mean(b_prev, "claridad_mental_bjj")
     kpis["claridad"] = (clar_this, *compare(clar_this, clar_prev))
 
     # Consistencia
@@ -392,30 +396,71 @@ with tab_entrenos:
 
         st.markdown("#### Añadir ejercicio")
 
+        # Selector fuera del form → se actualiza dinámicamente
+        col1, col2 = st.columns(2)
+        with col1:
+            nombre = st.text_input("Ejercicio", placeholder="Press banca, sentadilla, correr...")
+            tipo = st.selectbox("Tipo de ejercicio", ["Fuerza", "Cardio"])
+
         with st.form("add_exercise_form"):
+
             col1, col2 = st.columns(2)
-            with col1:
-                nombre = st.text_input("Ejercicio", placeholder="Press banca, sentadilla, remo...")
-                series = st.number_input("Series", min_value=1, value=3)
-                repeticiones = st.number_input("Repeticiones", min_value=1, value=8)
-            with col2:
-                peso = st.number_input("Peso (kg)", min_value=0.0, value=0.0, step=0.5)
-                rpe_ej = st.slider("RPE (opcional)", 1, 10, 7)
+
+            if tipo == "Fuerza":
+                with col1:
+                    series = st.number_input("Series", min_value=1, value=3)
+                    repeticiones = st.number_input("Repeticiones", min_value=1, value=8)
+
+                with col2:
+                    peso = st.number_input("Peso (kg)", min_value=0.0, value=0.0, step=0.5)
+                    rpe_ej = st.slider("RPE (opcional)", 1, 10, 7)
+
+            else:  # Cardio
+                with col1:
+                    distancia = st.number_input("Distancia (km)", min_value=0.0, value=5.0, step=0.1)
+                    duracion = st.number_input("Duración (min)", min_value=1, value=20)
+                with col2:
+                    rpe_ej = st.slider("RPE (opcional)", 1, 10, 7)
 
             if st.form_submit_button("Añadir ejercicio"):
-                st.session_state.ejercicios.append({
-                    "nombre": nombre,
-                    "series": series,
-                    "repeticiones": repeticiones,
-                    "peso": peso,
-                    "rpe": rpe_ej
-                })
-                st.success(f"Ejercicio añadido: {nombre}")
 
+                if tipo == "Fuerza":
+                    st.session_state.ejercicios.append({
+                        "tipo": "Fuerza",
+                        "nombre": nombre,
+                        "series": series,
+                        "repeticiones": repeticiones,
+                        "peso": peso,
+                        "rpe": rpe_ej
+                    })
+                else:
+                    st.session_state.ejercicios.append({
+                        "tipo": "Cardio",
+                        "nombre": nombre,
+                        "distancia": distancia,
+                        "duracion": duracion,
+                        "rpe": rpe_ej
+                    })
+
+                st.success(f"Ejercicio añadido: {nombre}")
         if st.session_state.ejercicios:
             st.markdown("### 📋 Ejercicios añadidos")
+
             for i, ej in enumerate(st.session_state.ejercicios):
-                st.write(f"**{i+1}. {ej['nombre']}** — {ej['series']}×{ej['repeticiones']} — {ej['peso']} kg — RPE {ej['rpe']}")
+
+                if ej["tipo"] == "Fuerza":
+                    st.write(
+                        f"**{i+1}. {ej['nombre']}** — "
+                        f"{ej['series']}×{ej['repeticiones']} — "
+                        f"{ej['peso']} kg — RPE {ej['rpe']}"
+                    )
+
+                else:  # Cardio
+                    st.write(
+                        f"**{i+1}. {ej['nombre']}** — "
+                        f"{ej['distancia']} km — "
+                        f"{ej['duracion']} min — RPE {ej['rpe']}"
+                    )
 
             if st.button("Guardar rutina completa"):
                 if rutina_nombre.strip() == "":
@@ -452,25 +497,82 @@ with tab_entrenos:
                 st.session_state.progreso_rutina = {}
 
             for i, ej in enumerate(ejercicios):
+
                 st.markdown(f"#### {ej['nombre']}")
 
                 check = st.checkbox("Completado", key=f"check_{rutina_sel}_{i}")
 
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    peso_real = st.number_input("Peso usado (kg)", min_value=0.0, value=float(ej['peso']), key=f"peso_real_{i}")
-                with col2:
-                    reps_real = st.number_input("Reps realizadas", min_value=0, value=int(ej['repeticiones']), key=f"reps_real_{i}")
-                with col3:
-                    rpe_real = st.slider("RPE", 1, 10, ej['rpe'], key=f"rpe_real_{i}")
+                if ej["tipo"] == "Fuerza":
+                    col1, col2, col3 = st.columns(3)
 
-                st.session_state.progreso_rutina[i] = {
-                    "nombre": ej["nombre"],
-                    "completado": check,
-                    "peso": peso_real,
-                    "reps": reps_real,
-                    "rpe": rpe_real
-                }
+                    with col1:
+                        peso_real = st.number_input(
+                            "Peso usado (kg)",
+                            min_value=0.0,
+                            value=float(ej["peso"]),
+                            key=f"peso_real_{i}"
+                        )
+
+                    with col2:
+                        reps_real = st.number_input(
+                            "Reps realizadas",
+                            min_value=0,
+                            value=int(ej["repeticiones"]),
+                            key=f"reps_real_{i}"
+                        )
+
+                    with col3:
+                        rpe_real = st.slider(
+                            "RPE",
+                            1, 10,
+                            ej["rpe"],
+                            key=f"rpe_real_{i}"
+                        )
+
+                    st.session_state.progreso_rutina[i] = {
+                        "tipo": "Fuerza",
+                        "nombre": ej["nombre"],
+                        "completado": check,
+                        "peso": peso_real,
+                        "reps": reps_real,
+                        "rpe": rpe_real
+                    }
+
+                else:  # CARDIO
+                    col1, col2, col3 = st.columns(3)
+
+                    with col1:
+                        dist_real = st.number_input(
+                            "Distancia (km)",
+                            min_value=0.0,
+                            value=float(ej["distancia"]),
+                            key=f"dist_real_{i}"
+                        )
+
+                    with col2:
+                        dur_real = st.number_input(
+                            "Duración (min)",
+                            min_value=1,
+                            value=int(ej["duracion"]),
+                            key=f"dur_real_{i}"
+                        )
+
+                    with col3:
+                        rpe_real = st.slider(
+                            "RPE",
+                            1, 10,
+                            ej["rpe"],
+                            key=f"rpe_real_{i}"
+                        )
+
+                    st.session_state.progreso_rutina[i] = {
+                        "tipo": "Cardio",
+                        "nombre": ej["nombre"],
+                        "completado": check,
+                        "distancia": dist_real,
+                        "duracion": dur_real,
+                        "rpe": rpe_real
+                    }
 
             if st.button("Guardar entrenamiento realizado"):
                 insert_row("entrenos_realizados", {
@@ -651,18 +753,42 @@ input, select, textarea {
 
         meal_name = st.text_input("Nombre de la comida", placeholder="Ej: Desayuno 9 abril")
         notas = st.text_area("Notas (opcional)")
+        imagen = st.file_uploader("Sube una foto de tu comida (opcional)", type=["jpg", "jpeg", "png"])
 
         if st.button("Guardar comida en Supabase"):
+
             if meal_name.strip() == "":
                 st.warning("Pon un nombre a la comida antes de guardarla")
             else:
-                insert_row("comidas_bedca", {
+
+                # Guardar en la tabla comidas
+                res = insert_row("comidas_bedca", {
                     "timestamp": timestamp(),
                     "nombre": meal_name,
                     "alimentos": meal_df.fillna(0).to_dict(orient="records"),
                     "totales": totals.fillna(0).to_dict(orient="records"),
                     "notas": notas
                 })
+
+                comida_id = res[0]["id"]
+                if imagen is not None:
+                    file_bytes = imagen.read()
+                    file_name = f"{uuid.uuid4()}_{imagen.name}"
+
+                    supabase.storage.from_("imagenes_comida").upload(file_name, file_bytes)
+                    foto_url = supabase.storage.from_("imagenes_comida").get_public_url(file_name)
+
+                    insert_row("comidas_fotos", {
+                        "comida_id": comida_id,
+                        "foto_url": foto_url
+                    })
+
+                    if foto_url:
+                        st.image(foto_url, caption="Tu comida")
+
+                st.success("Comida guardada correctamente")
+
+                
     else:
         st.info("Selecciona al menos un alimento desde la barra lateral.")
 
@@ -675,65 +801,88 @@ input, select, textarea {
     if df_comidas.empty:
         st.info("Todavía no has registrado ninguna comida.")
     else:
-        # Ordenar por fecha descendente
-        df_comidas = df_comidas.sort_values("timestamp", ascending=False)
+        df_comidas["fecha"] = pd.to_datetime(df_comidas["timestamp"]).dt.date
 
-        for _, comida in df_comidas.iterrows():
+        fecha_sel = st.date_input("Filtrar por fecha", value=None)
 
-            # Extraer totales principales
+        if fecha_sel:
+            df_comidas = df_comidas[df_comidas["fecha"] == fecha_sel]
+
+        if df_comidas.empty:
+            st.info("No hay comidas registradas en esa fecha.")
+        else:
+            df_comidas = df_comidas.sort_values("timestamp", ascending=False)
+                # Tamaño de página
+        page_size = 5
+
+        # Total de páginas
+        total_pages = (len(df_comidas) - 1) // page_size + 1
+
+        # Estado de página
+        if "page_hist" not in st.session_state:
+            st.session_state.page_hist = 1
+
+        # Controles
+        col1, col2, col3 = st.columns([1,2,1])
+
+        with col1:
+            if st.button("⬅️ Anterior", key="prev_hist") and st.session_state.page_hist > 1:
+                st.session_state.page_hist -= 1
+
+        with col3:
+            if st.button("Siguiente ➡️", key="next_hist") and st.session_state.page_hist < total_pages:
+                st.session_state.page_hist += 1
+
+        st.write(f"Página {st.session_state.page_hist} de {total_pages}")
+
+        # Selección de comidas de la página actual
+        start = (st.session_state.page_hist - 1) * page_size
+        end = start + page_size
+        df_page = df_comidas.iloc[start:end]
+        for _, comida in df_page.iterrows():
+
             tot = pd.DataFrame(comida["totales"])
             kcal = tot.loc[tot["Nutriente"] == "energia_kcal", "Total"].values[0]
-            prot = tot.loc[tot["Nutriente"] == "proteina_total", "Total"].values[0]
-            carb = tot.loc[tot["Nutriente"] == "carbohidratos", "Total"].values[0]
-            gras = tot.loc[tot["Nutriente"] == "grasa_total", "Total"].values[0]
 
-            with st.expander(f"🍽️ {comida['nombre']} — {kcal:.0f} kcal"):
+            with st.expander(f"🍽️ {comida['nombre']} — {kcal:.0f} kcal", expanded=False):
 
                 st.caption(f"📅 {comida['timestamp']}")
 
-                # ---------------------------
-                # MACROS DESTACADOS (KPI BLOCK)
-                # ---------------------------
+                # FOTOS
+                fotos = fetch_fotos(comida["id"])
+                if fotos:
+                    st.markdown("### 📸 Fotos")
+                    cols = st.columns(min(3, len(fotos)))
+                    for i, foto in enumerate(fotos):
+                        with cols[i % 3]:
+                            st.image(foto["foto_url"], use_container_width=True)
+                else:
+                    st.caption("Sin fotos")
+
+                # MACROS
                 st.markdown("### 📦 Macronutrientes")
+                prot = tot.loc[tot["Nutriente"] == "proteina_total", "Total"].values[0]
+                carb = tot.loc[tot["Nutriente"] == "carbohidratos", "Total"].values[0]
+                gras = tot.loc[tot["Nutriente"] == "grasa_total", "Total"].values[0]
 
                 c1, c2, c3, c4 = st.columns(4)
+                with c1: kpi_block("Kcal", f"{kcal:.0f}")
+                with c2: kpi_block("Proteína", f"{prot:.1f}", " g")
+                with c3: kpi_block("Carbohidratos", f"{carb:.1f}", " g")
+                with c4: kpi_block("Grasas", f"{gras:.1f}", " g")
 
-                with c1: 
-                    kpi_block("Kcal", f"{kcal:.0f}")
-                with c2: 
-                    kpi_block("Proteína", f"{prot:.1f}", " g")
-                with c3: 
-                    kpi_block("Carbohidratos", f"{carb:.1f}", " g")
-                with c4: 
-                    kpi_block("Grasas", f"{gras:.1f}", " g")
-
-                # ---------------------------
                 # ALIMENTOS
-                # ---------------------------
                 st.markdown("### 🥗 Alimentos")
-                alimentos_df = pd.DataFrame(comida["alimentos"])
-                st.dataframe(alimentos_df, use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(comida["alimentos"]), use_container_width=True, hide_index=True)
 
-                # ---------------------------
-                # MICRONUTRIENTES EN EXPANDER
-                # ---------------------------
+                # MICROS
                 st.markdown("### 🧪 Micronutrientes")
-
                 with st.expander("Ver micronutrientes"):
                     micro_df = tot[
-                        ~tot["Nutriente"].isin([
-                            "energia_kcal", "proteina_total", "carbohidratos", "grasa_total"
-                        ])
+                        ~tot["Nutriente"].isin(["energia_kcal","proteina_total","carbohidratos","grasa_total"])
                     ].copy()
-
                     micro_df["Total"] = micro_df["Total"].round(3)
-
-                    st.dataframe(
-                        micro_df,
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
+                    st.dataframe(micro_df, use_container_width=True, hide_index=True)
 
     st.markdown('<div class="section-title">📅 Totales del día</div>', unsafe_allow_html=True)
 
