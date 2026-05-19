@@ -210,21 +210,17 @@ def compute_weekly_kpis(df_metrics, df_bjj):
 
 
 def get_week(df, weeks_ago=0):
-    """
-    weeks_ago = 0 → esta semana
-    weeks_ago = 1 → semana anterior
-    """
     if df.empty:
         return df
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True).dt.tz_localize(None)
+
     today = datetime.utcnow()
 
     start = today - timedelta(days=7 * (weeks_ago + 1))
     end = today - timedelta(days=7 * weeks_ago)
 
     return df[(df["timestamp"] >= start) & (df["timestamp"] < end)]
-
 
 
 
