@@ -13,6 +13,8 @@ st.set_page_config(
     page_icon="📘"
 )
 
+
+
 st.markdown("""
 <style>
     .main { padding-top: 1rem; }
@@ -27,12 +29,66 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
+
 # ---------------------------------------------------------
 # CONEXIÓN A SUPABASE
 # ---------------------------------------------------------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+if "usuario" not in st.session_state:
+    st.session_state.usuario = None
+
+# 🚨 SI YA HAY USUARIO, SALTAR LA PANTALLA DE SELECCIÓN
+if st.session_state.usuario is not None:
+    usuario_actual = st.session_state.usuario
+else:
+    # ---------------------------------------------------------
+    # PANTALLA DE SELECCIÓN / REGISTRO DE USUARIO
+    # ---------------------------------------------------------
+    st.markdown("## 👤 Selecciona tu usuario")
+
+    # Cargar usuarios desde Supabase
+    res = supabase.table("usuarios").select("*").execute()
+    usuarios = [u["nombre"] for u in res.data]
+
+    modo = st.radio("¿Qué quieres hacer?", ["Entrar con usuario existente", "Crear usuario nuevo"])
+
+    if modo == "Crear usuario nuevo":
+        nuevo = st.text_input("Nombre del nuevo usuario")
+
+        if st.button("Registrar usuario"):
+            if nuevo.strip() == "":
+                st.error("El nombre no puede estar vacío")
+            elif nuevo in usuarios:
+                st.warning("Ese usuario ya existe")
+            else:
+                supabase.table("usuarios").insert({"nombre": nuevo}).execute()
+
+                # Reset total del estado
+                st.session_state.clear()
+                st.session_state.usuario = nuevo
+                st.rerun()
+
+
+    else:
+        user_sel = st.selectbox("Selecciona tu usuario", usuarios)
+
+        if st.button("Entrar"):
+            st.session_state.clear()
+            st.session_state.usuario = user_sel
+            st.rerun()
+
+    st.stop()
+
+# ---------------------------------------------------------
+# A PARTIR DE AQUÍ YA HAY USUARIO
+# ---------------------------------------------------------
+usuario_actual = st.session_state.usuario
+st.success(f"Bienvenido, {usuario_actual}")
+
 
 
 # ---------------------------------------------------------
@@ -78,16 +134,16 @@ def kpi_block(label, value, suffix=""):
 def fetch_table(table: str, limit: int = 500):
     """Obtiene datos de una tabla de Supabase como DataFrame."""
     try:
-        res = supabase.table(table).select("*").order("timestamp", desc=True).limit(limit).execute()
+        res = supabase.table(table).select("*").eq("usuario", st.session_state.usuario).order("timestamp", desc=True).limit(limit).execute()
         return pd.DataFrame(res.data)
     except Exception as e:
         st.error(f"Error al cargar datos: {e}")
         return pd.DataFrame()
 
 
-def fetch_comidas_bedca():
+def fetch_comidas_bedca(user_id):
     try:
-        res = supabase.table("comidas_bedca").select("*").order("timestamp", desc=True).execute()
+        res = supabase.table("comidas_bedca").select("*").eq("usuario", user_id).order("timestamp", desc=True).execute()
         return pd.DataFrame(res.data)
     except Exception as e:
         st.error(f"Error al cargar comidas: {e}")
@@ -295,7 +351,8 @@ with tab_metrics:
                 "calidad_sueno": calidad_sueno,
                 "energia": energia,
                 "fatiga": fatiga,
-                "pulso_reposo": pulso_reposo
+                "pulso_reposo": pulso_reposo,
+                "usuario": usuario_actual
             })
 
 
@@ -324,7 +381,8 @@ with tab_metrics:
                 "cardio": cardio,
                 "claridad_mental": claridad_mental,
                 "calidad_ultimo_round": calidad_ultimo_round,
-                "notas": notas
+                "notas": notas,
+                "usuario": usuario_actual
             })
 
 
@@ -370,7 +428,8 @@ with tab_metrics:
                 "intensidad_bjj": intensidad_bjj,
                 "recuperacion_rounds": recuperacion_rounds,
                 **tecnicas,
-                "notas_bjj": notas_bjj
+                "notas_bjj": notas_bjj,
+                "usuario": usuario_actual
             })
 
 
@@ -469,7 +528,8 @@ with tab_entrenos:
                     insert_row("rutina", {
                         "timestamp": timestamp(),
                         "nombre": rutina_nombre,
-                        "ejercicios": st.session_state.ejercicios
+                        "ejercicios": st.session_state.ejercicios,
+                        "usuario": usuario_actual
                     })
                     st.success(f"Rutina '{rutina_nombre}' guardada correctamente")
                     st.session_state.ejercicios = []
@@ -578,7 +638,8 @@ with tab_entrenos:
                 insert_row("entrenos_realizados", {
                     "timestamp": timestamp(),
                     "rutina": rutina_sel,
-                    "ejercicios": st.session_state.progreso_rutina
+                    "ejercicios": st.session_state.progreso_rutina,
+                    "usuario": usuario_actual
                 })
                 st.success("Entrenamiento guardado correctamente")
                 st.session_state.progreso_rutina = {}
@@ -767,7 +828,9 @@ input, select, textarea {
                     "nombre": meal_name,
                     "alimentos": meal_df.fillna(0).to_dict(orient="records"),
                     "totales": totals.fillna(0).to_dict(orient="records"),
-                    "notas": notas
+                    "notas": notas,
+                    "usuario": usuario_actual
+
                 })
 
                 comida_id = res[0]["id"]
@@ -780,7 +843,8 @@ input, select, textarea {
 
                     insert_row("comidas_fotos", {
                         "comida_id": comida_id,
-                        "foto_url": foto_url
+                        "foto_url": foto_url,
+                        "usuario": usuario_actual
                     })
 
                     if foto_url:
@@ -796,7 +860,7 @@ input, select, textarea {
 
     st.markdown('<div class="section-title">📚 Historial de comidas</div>', unsafe_allow_html=True)
 
-    df_comidas = fetch_comidas_bedca()
+    df_comidas = fetch_comidas_bedca(usuario_actual)
 
     if df_comidas.empty:
         st.info("Todavía no has registrado ninguna comida.")
@@ -885,7 +949,9 @@ input, select, textarea {
                     st.dataframe(micro_df, use_container_width=True, hide_index=True)
 
     st.markdown('<div class="section-title">📅 Totales del día</div>', unsafe_allow_html=True)
-
+    if df_comidas.empty:
+        st.info("Todavía no hay comidas registradas para este usuario.")
+        st.stop()
     df_comidas["fecha"] = pd.to_datetime(df_comidas["timestamp"]).dt.date
 
     fecha_sel = st.date_input("Selecciona una fecha")
